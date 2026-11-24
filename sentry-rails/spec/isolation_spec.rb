@@ -23,18 +23,22 @@ RSpec.describe "isolate: true metadata" do
 
   context "when reporting results to RSpec" do
     before(:context) do
+      fixture = File.join(__dir__, "fixtures/isolation_examples.rb")
+
       Dir.mktmpdir do |dir|
         out = File.join(dir, "report.json")
         @coverage_dir = File.join(dir, "coverage")
         system(
           { "SENTRY_RAILS_COVERAGE_DIR" => @coverage_dir },
-          "bundle", "exec", "rspec", File.join(__dir__, "fixtures/isolation_examples.rb"),
+          "bundle", "exec", "rspec", fixture,
           "--format", "json", "--out", out, "--no-color",
           out: File::NULL, err: File::NULL
         )
         @report = JSON.parse(File.read(out))
         resultset = File.join(@coverage_dir, ".resultset.json")
-        @coverage_runs = File.exist?(resultset) ? JSON.parse(File.read(resultset)).keys : []
+        coverage_runs = File.exist?(resultset) ? JSON.parse(File.read(resultset)).values : []
+        child_only_line = File.readlines(fixture).index { |line| line.include?("expect(Process.pid).not_to eq(RUNNER_PID)") }
+        @child_only_line_hits = coverage_runs.sum { |run| run.dig("coverage", fixture, "lines", child_only_line).to_i }
       end
     end
 
@@ -77,8 +81,8 @@ RSpec.describe "isolate: true metadata" do
       expect(example.dig("exception", "message")).to match(/exited without reporting.*exit 3/)
     end
 
-    it "records coverage from the child process" do
-      expect(@coverage_runs).to include(a_string_matching(/subprocess/))
+    it "records coverage of code that only runs in the child process" do
+      expect(@child_only_line_hits).to be_positive
     end
 
 it "reports every error of an example that fails more than once" do

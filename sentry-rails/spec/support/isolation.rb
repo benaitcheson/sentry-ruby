@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 # Runs specs in a forked child process, so the process-global state a Rails app
 # boot leaves behind (load hooks, callbacks, singletons) dies with the child
 # instead of leaking into later examples.
@@ -107,10 +109,9 @@ module Test
           @in_child = true
           reader.close
           Coverage.start_in_child
-          data = Marshal.dump(yield)
-          writer.write(data)
+          result = yield
+          writer.write(Marshal.dump(result: result, coverage: Coverage.result_from_child))
           writer.close
-          Coverage.save_from_child
           $stdout.flush
           $stderr.flush
           exit!(0)
@@ -178,7 +179,11 @@ module Test
         if IO.select([reader], nil, nil, TIMEOUT)
           data = reader.read
           status = Process.wait2(pid).last
-          return Marshal.load(data) unless data.empty?
+          unless data.empty?
+            payload = Marshal.load(data)
+            Coverage.absorb(payload[:coverage])
+            return payload[:result]
+          end
 
           crashed("isolated spec exited without reporting (#{status.inspect})")
         else
@@ -205,21 +210,32 @@ module Test
       end
     end
 
-    # The child exits with `exit!`, which skips SimpleCov's at_exit hook, so it
-    # starts its own measurement (the same thing SimpleCov's subprocess support
-    # does) and stores its result for the parent to merge at exit.
     module Coverage
       module_function
 
       def start_in_child
-        return unless simplecov_running?
-
-        ::Coverage.result(stop: false, clear: true)
-        SimpleCov.at_fork.call(Process.pid)
+        ::Coverage.result(stop: false, clear: true) if simplecov_running?
       end
 
-      def save_from_child
-        SimpleCov.result if simplecov_running?
+      def result_from_child
+        return unless simplecov_running?
+
+        root = SimpleCov.root
+        project_files = ::Coverage.result(stop: false, clear: true).select { |file, _| file.start_with?(root) }
+        JSON.parse(JSON.dump(SimpleCov::ResultAdapter.call(project_files)))
+      end
+
+      def absorb(coverage)
+        return unless coverage
+
+        @children = SimpleCov::Combine::ResultsCombiner.combine(@children || {}, coverage)
+      end
+
+      def store_children
+        return unless @children && simplecov_running?
+
+        result = SimpleCov::Result.new(@children, command_name: "#{SimpleCov.command_name} (isolated)")
+        SimpleCov::ResultMerger.store_result(result)
       end
 
       def simplecov_running?
@@ -231,3 +247,5 @@ end
 
 RSpec::Core::Example.prepend(Test::Isolation::ExampleExtension)
 RSpec::Core::ExampleGroup.singleton_class.prepend(Test::Isolation::GroupExtension)
+
+at_exit { Test::Isolation::Coverage.store_children }

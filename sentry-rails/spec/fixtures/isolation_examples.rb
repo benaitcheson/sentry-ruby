@@ -10,7 +10,9 @@ RSpec.describe "isolated examples", isolate: true do
   it("raises an error") { raise ArgumentError, "boom" }
   it("dies without reporting") { exit!(3) }
   it("skips") { skip "not today" }
-  it("passes") { expect(Process.pid).not_to eq(RUNNER_PID) }
+  it("passes") do
+    expect(Process.pid).not_to eq(RUNNER_PID)
+  end
 
   context "with a failing hook" do
     before { raise "hook failed" }
