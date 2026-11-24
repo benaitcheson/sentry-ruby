@@ -18,7 +18,7 @@ require "simplecov"
 SimpleCov.start do
   project_name "sentry-rails"
   root File.join(__FILE__, "../../../")
-  coverage_dir File.join(__FILE__, "../../coverage")
+  coverage_dir ENV.fetch("SENTRY_RAILS_COVERAGE_DIR") { File.join(__FILE__, "../../coverage") }
 end
 
 
